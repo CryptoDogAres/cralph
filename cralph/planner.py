@@ -41,7 +41,7 @@ def _run_claude(system: str, prompt: str) -> str:
     return output.strip()
 
 
-def _run_planner(task: str, draft: str, feedback: str, iteration: int) -> str:
+def _run_planner(task: str, draft: str, feedback: str, iteration: int, limit: int) -> str:
     if iteration == 1:
         prompt = f"## Task\n\n{task}\n\nCreate the implementation plan."
     else:
@@ -51,17 +51,17 @@ def _run_planner(task: str, draft: str, feedback: str, iteration: int) -> str:
             f"## Reviewer Feedback\n\n{feedback}\n\n"
             "Revise the plan addressing all feedback points."
         )
-    console.print(Panel(f"[bold cyan]Planner[/] — iteration {iteration}/{MAX_PLAN_ITERATIONS}", expand=False))
+    console.print(Panel(f"[bold cyan]Planner[/] — iteration {iteration}/{limit}", expand=False))
     return _run_claude(PLANNER_SYSTEM, prompt)
 
 
-def _run_reviewer(task: str, draft: str, iteration: int) -> tuple[str, str]:
+def _run_reviewer(task: str, draft: str, iteration: int, limit: int) -> tuple[str, str]:
     prompt = (
         f"## Original Task\n\n{task}\n\n"
         f"## Plan to Review\n\n{draft}\n\n"
         "Review this plan."
     )
-    console.print(Panel(f"[bold yellow]Reviewer[/] — iteration {iteration}/{MAX_PLAN_ITERATIONS}", expand=False))
+    console.print(Panel(f"[bold yellow]Reviewer[/] — iteration {iteration}/{limit}", expand=False))
     response = _run_claude(REVIEWER_SYSTEM, prompt)
 
     result = "REVISE"
@@ -76,19 +76,20 @@ def _run_reviewer(task: str, draft: str, iteration: int) -> tuple[str, str]:
     return result, feedback
 
 
-def run_plan_loop(feature: Feature) -> None:
-    """Run the full 6-iteration plan loop for a feature."""
+def run_plan_loop(feature: Feature, max_iterations: int | None = None) -> None:
+    """Run the plan loop for a feature."""
     task = feature.read_task()
     draft = ""
     feedback = ""
+    limit = min(max_iterations, MAX_PLAN_ITERATIONS) if max_iterations else MAX_PLAN_ITERATIONS
 
     console.rule(f"[bold]Planning: {feature.feature_id}")
 
-    for iteration in range(1, MAX_PLAN_ITERATIONS + 1):
-        draft = _run_planner(task, draft, feedback, iteration)
+    for iteration in range(1, limit + 1):
+        draft = _run_planner(task, draft, feedback, iteration, limit)
         feature.write_plan_draft(draft, iteration)
 
-        result, feedback = _run_reviewer(task, draft, iteration)
+        result, feedback = _run_reviewer(task, draft, iteration, limit)
         feature.write_review(result, feedback)
 
         console.print()
@@ -97,7 +98,7 @@ def run_plan_loop(feature: Feature) -> None:
             break
         else:
             console.print(f"[bold yellow]↺ REVISE[/] — iteration {iteration} feedback recorded")
-            if iteration < MAX_PLAN_ITERATIONS:
+            if iteration < limit:
                 console.print(Markdown(f"**Feedback:**\n{feedback}"))
             else:
                 console.print("[yellow]Max iterations reached — finalizing plan as-is[/]")

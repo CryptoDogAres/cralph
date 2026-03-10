@@ -19,6 +19,7 @@ FeatureStatus = Literal[
     "building",
     "built",
     "build-partial",
+    "abandoned",
 ]
 
 

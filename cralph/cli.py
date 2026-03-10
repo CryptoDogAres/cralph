@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import shutil
 import sys
 from pathlib import Path
 
@@ -45,15 +46,16 @@ def main() -> None:
 
 @main.command()
 @click.argument("task")
-def generate(task: str) -> None:
+@click.option("--iterations", "-i", default=None, type=int, help="Max plan iterations (default: 6).")
+def generate(task: str, iterations: int | None) -> None:
     """Generate an implementation plan for TASK.
 
-    Runs a 6-iteration plan/review loop using Claude Sonnet 4.6.
+    Runs up to 6 plan/review iterations using Claude Sonnet 4.6.
     Creates state in .cralph/<feature-id>/ in the current directory.
     """
     feature = Feature.create(task, _project_root())
     console.print(f"[dim]Feature ID: {feature.feature_id}[/]")
-    run_plan_loop(feature)
+    run_plan_loop(feature, max_iterations=iterations)
 
 
 @main.command()
@@ -167,6 +169,27 @@ def report(feature_id: str | None) -> None:
         console.print("[dim]No build report yet. Run `cralph build` first.[/]")
         return
     console.print(Markdown(content))
+
+
+@main.command()
+@click.argument("feature_id", required=False)
+@click.option("--delete", is_flag=True, help="Also delete all state files for this feature.")
+def abandon(feature_id: str | None, delete: bool) -> None:
+    """Mark a feature as abandoned (or delete it entirely).
+
+    Useful after Ctrl+C or when a feature is no longer needed.
+    Without --delete, marks the feature as abandoned in .cralph/.
+    With --delete, removes the feature directory completely.
+    """
+    feature = _resolve_feature(feature_id)
+
+    if delete:
+        shutil.rmtree(feature.root)
+        console.print(f"[red]Deleted[/] {feature.feature_id}")
+    else:
+        feature.set_status("abandoned")
+        console.print(f"[yellow]Abandoned[/] {feature.feature_id}")
+        console.print(f"[dim]State preserved at {feature.root} — use --delete to remove.[/]")
 
 
 @main.command()
