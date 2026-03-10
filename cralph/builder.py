@@ -23,6 +23,7 @@ console = Console()
 
 def _run_claude(system: str, prompt: str) -> str:
     """Run a non-interactive claude call and return the response text."""
+    import os
     cmd = [
         "claude", "-p", prompt,
         "--system-prompt", system,
@@ -30,7 +31,8 @@ def _run_claude(system: str, prompt: str) -> str:
         "--no-session-persistence",
         "--tools", "",
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True)
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    result = subprocess.run(cmd, capture_output=True, text=True, env=env)
     if result.returncode != 0:
         console.print(f"[red]claude error (exit {result.returncode}):[/] {result.stderr}")
         sys.exit(1)

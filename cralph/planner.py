@@ -18,6 +18,7 @@ console = Console()
 
 def _run_claude(system: str, prompt: str) -> str:
     """Run a non-interactive claude call, stream to terminal, return full text."""
+    import os
     cmd = [
         "claude", "-p", prompt,
         "--system-prompt", system,
@@ -25,7 +26,8 @@ def _run_claude(system: str, prompt: str) -> str:
         "--no-session-persistence",
         "--tools", "",
     ]
-    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
+    proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env)
     output = ""
     for line in proc.stdout:
         print(line, end="", flush=True)
