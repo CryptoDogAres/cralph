@@ -13,6 +13,7 @@ from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TextColumn
 
 from .config import BUILD_MODEL, CODEX_CMD, MAX_BUILD_SUBAGENTS, PLAN_MODEL
+from .git import setup_build_branch
 from .prompts import AGGREGATOR_SYSTEM, DECOMPOSER_SYSTEM
 from .state import Feature
 
@@ -201,8 +202,15 @@ def _aggregate_results(results: list[dict], feature: Feature) -> None:
 
 
 def run_build(feature: Feature, project_root: Path) -> None:
-    """Full build pipeline: decompose → execute → aggregate."""
+    """Full build pipeline: branch → decompose → execute → aggregate."""
     console.rule(f"[bold]Building: {feature.feature_id}")
+
+    # Create and checkout a dedicated branch off the default branch
+    branch = setup_build_branch(feature.feature_id, project_root)
+    if branch:
+        data = feature._read_status()
+        data["branch"] = branch
+        feature._write_status(data)
 
     feature.set_status("decomposing")
     tasks = decompose_plan(feature)

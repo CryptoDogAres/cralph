@@ -89,6 +89,10 @@ def status(feature_id: str | None) -> None:
     console.print(f"\n[bold]Feature:[/] {feature.feature_id}")
     console.print(f"[bold]Status:[/]  {feat_status}")
 
+    branch = feature._read_status().get("branch")
+    if branch:
+        console.print(f"[bold]Branch:[/]  {branch}")
+
     iteration = feature.plan_iteration()
     if iteration > 0:
         plan_result = feature.read_plan_result()
