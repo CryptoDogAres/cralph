@@ -3,29 +3,19 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import sys
 from pathlib import Path
 
 import click
-import anthropic
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.table import Table
 
-from .builder import run_build
+from .builder import _aggregate_results, _execute_levels, run_build, topological_levels
 from .planner import run_plan_loop
 from .state import Feature
 
 console = Console()
-
-
-def _client() -> anthropic.Anthropic:
-    key = os.getenv("ANTHROPIC_API_KEY")
-    if not key:
-        console.print("[red]Error:[/] ANTHROPIC_API_KEY environment variable not set.")
-        sys.exit(1)
-    return anthropic.Anthropic(api_key=key)
 
 
 def _project_root() -> Path:
@@ -61,10 +51,9 @@ def generate(task: str) -> None:
     Runs a 6-iteration plan/review loop using Claude Sonnet 4.6.
     Creates state in .cralph/<feature-id>/ in the current directory.
     """
-    client = _client()
     feature = Feature.create(task, _project_root())
     console.print(f"[dim]Feature ID: {feature.feature_id}[/]")
-    run_plan_loop(feature, client)
+    run_plan_loop(feature)
 
 
 @main.command()
@@ -75,18 +64,17 @@ def build(feature_id: str | None) -> None:
     Decomposes the plan into tasks and executes them with Codex.
     Uses FEATURE_ID or the most recently generated plan.
     """
-    client = _client()
     feature = _resolve_feature(feature_id)
 
     status = feature.get_status()
     if status == "planning":
-        console.print(f"[red]Error:[/] Feature is still in planning state. Run `cralph generate` first.")
+        console.print("[red]Error:[/] Feature is still in planning state. Run `cralph generate` first.")
         sys.exit(1)
     if status in ("building", "decomposing"):
-        console.print(f"[yellow]Warning:[/] Feature is already being built. Use `cralph retry` to retry failed tasks.")
+        console.print("[yellow]Warning:[/] Feature is already being built. Use `cralph retry` to retry failed tasks.")
         sys.exit(1)
 
-    run_build(feature, client, _project_root())
+    run_build(feature, _project_root())
 
 
 @main.command()
@@ -99,14 +87,12 @@ def status(feature_id: str | None) -> None:
     console.print(f"\n[bold]Feature:[/] {feature.feature_id}")
     console.print(f"[bold]Status:[/]  {feat_status}")
 
-    # Plan progress
     iteration = feature.plan_iteration()
     if iteration > 0:
         plan_result = feature.read_plan_result()
         icon = "[green]✓[/]" if plan_result == "APPROVED" else "[yellow]~[/]"
         console.print(f"[bold]Plan:[/]    {icon} iteration {iteration}/6 — {plan_result}")
 
-    # Build task progress
     task_statuses = feature.task_statuses()
     if task_statuses:
         console.print()
@@ -187,7 +173,6 @@ def report(feature_id: str | None) -> None:
 @click.argument("feature_id", required=False)
 def retry(feature_id: str | None) -> None:
     """Retry failed build tasks for a feature."""
-    client = _client()
     feature = _resolve_feature(feature_id)
 
     task_statuses = feature.task_statuses()
@@ -197,17 +182,13 @@ def retry(feature_id: str | None) -> None:
         console.print("[green]No failed tasks to retry.[/]")
         return
 
-    # Reset failed tasks to pending so the builder picks them up
     for tid in failed_ids:
         feature.update_task_status(tid, "pending")
 
     console.print(f"[yellow]Retrying {len(failed_ids)} failed task(s)…[/]")
 
-    # Re-run only the failed tasks
     all_tasks = feature.read_tasks()
     failed_tasks = [t for t in all_tasks if t["id"] in failed_ids]
-
-    from .builder import _aggregate_results, _execute_levels, topological_levels
 
     levels = topological_levels(failed_tasks)
     feature.set_status("building")
@@ -216,11 +197,9 @@ def retry(feature_id: str | None) -> None:
     still_failed = [r for r in retry_results if r["status"] == "failed"]
     feature.set_status("build-partial" if still_failed else "built")
 
-    # Build a full result set (previously done + just retried)
     prev_done_ids = {tid for tid, s in task_statuses.items() if s == "done"}
-    all_tasks = feature.read_tasks()
     synthetic_done = [
         {"id": t["id"], "title": t["title"], "status": "done", "output": "", "error": ""}
         for t in all_tasks if t["id"] in prev_done_ids
     ]
-    _aggregate_results(synthetic_done + retry_results, feature, client)
+    _aggregate_results(synthetic_done + retry_results, feature)

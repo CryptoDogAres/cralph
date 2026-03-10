@@ -8,7 +8,6 @@ version = "0.1.0"
 description = "Claude + Ralph: AI-powered feature planning and implementation"
 requires-python = ">=3.11"
 dependencies = [
-    "anthropic>=0.40.0",
     "click>=8.0",
     "rich>=13.0",
 ]

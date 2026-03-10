@@ -6,12 +6,11 @@ import asyncio
 import json
 import shlex
 import subprocess
+import sys
 from pathlib import Path
 
-import anthropic
 from rich.console import Console
 from rich.progress import BarColumn, Progress, SpinnerColumn, TaskID, TextColumn
-from rich.table import Table
 
 from .config import BUILD_MODEL, CODEX_CMD, MAX_BUILD_SUBAGENTS, PLAN_MODEL
 from .prompts import AGGREGATOR_SYSTEM, DECOMPOSER_SYSTEM
@@ -20,27 +19,39 @@ from .state import Feature
 console = Console()
 
 
+# ── Claude subprocess helper ──────────────────────────────────────────────────
+
+def _run_claude(system: str, prompt: str) -> str:
+    """Run a non-interactive claude call and return the response text."""
+    cmd = [
+        "claude", "-p", prompt,
+        "--system-prompt", system,
+        "--model", PLAN_MODEL,
+        "--no-session-persistence",
+        "--tools", "",
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True)
+    if result.returncode != 0:
+        console.print(f"[red]claude error (exit {result.returncode}):[/] {result.stderr}")
+        sys.exit(1)
+    return result.stdout.strip()
+
+
 # ── Task decomposition ────────────────────────────────────────────────────────
 
-def decompose_plan(feature: Feature, client: anthropic.Anthropic) -> list[dict]:
+def decompose_plan(feature: Feature) -> list[dict]:
     """Ask Claude to break the final plan into a task DAG."""
     plan = feature.read_final_plan()
     task_desc = feature.read_task()
 
-    user_msg = (
+    prompt = (
         f"## Original Task\n\n{task_desc}\n\n"
         f"## Implementation Plan\n\n{plan}\n\n"
         "Decompose this plan into implementation tasks."
     )
 
     console.print("[cyan]Decomposing plan into tasks…[/]")
-    response = client.messages.create(
-        model=PLAN_MODEL,
-        max_tokens=8096,
-        system=DECOMPOSER_SYSTEM,
-        messages=[{"role": "user", "content": user_msg}],
-    )
-    raw = response.content[0].text.strip()
+    raw = _run_claude(DECOMPOSER_SYSTEM, prompt)
 
     # Strip markdown fences if present
     if raw.startswith("```"):
@@ -67,8 +78,7 @@ def topological_levels(tasks: list[dict]) -> list[list[dict]]:
             if all(dep in completed for dep in task_map[tid].get("dependencies", []))
         ]
         if not ready:
-            # Circular dependency guard — unblock by taking first
-            ready = [remaining[0]]
+            ready = [remaining[0]]  # circular dependency guard
         levels.append([task_map[tid] for tid in ready])
         completed.update(ready)
         remaining = [tid for tid in remaining if tid not in completed]
@@ -97,7 +107,6 @@ async def _run_codex_task(
         "Focus only on this task. Do not modify files outside your scope."
     )
 
-    # Build the command from the template
     cmd_str = CODEX_CMD.format(model=BUILD_MODEL, task=shlex.quote(prompt))
     cmd = shlex.split(cmd_str)
 
@@ -140,7 +149,6 @@ async def _execute_levels(
     feature: Feature,
     project_root: Path,
 ) -> list[dict]:
-    """Execute task levels in order, parallelising within each level."""
     semaphore = asyncio.Semaphore(MAX_BUILD_SUBAGENTS)
     all_results: list[dict] = []
 
@@ -167,11 +175,7 @@ async def _execute_levels(
     return all_results
 
 
-def _aggregate_results(
-    results: list[dict],
-    feature: Feature,
-    client: anthropic.Anthropic,
-) -> None:
+def _aggregate_results(results: list[dict], feature: Feature) -> None:
     """Ask Claude to write a build report from task results."""
     done = [r for r in results if r["status"] == "done"]
     failed = [r for r in results if r["status"] == "failed"]
@@ -179,54 +183,40 @@ def _aggregate_results(
     summary_lines = []
     for r in results:
         icon = "✓" if r["status"] == "done" else "✗"
-        summary_lines.append(f"- [{icon}] {r['id']}: {r['title']}\n  Output snippet: {r['output'][:200]}")
+        summary_lines.append(f"- [{icon}] {r['id']}: {r['title']}\n  Output: {r['output'][:200]}")
         if r["status"] == "failed":
             summary_lines.append(f"  Error: {r['error'][:200]}")
 
-    user_msg = (
+    prompt = (
         f"## Build Results\n\n"
         f"Total: {len(results)} | Done: {len(done)} | Failed: {len(failed)}\n\n"
         + "\n".join(summary_lines)
     )
 
     console.print("\n[cyan]Generating build report…[/]")
-    response = client.messages.create(
-        model=PLAN_MODEL,
-        max_tokens=4096,
-        system=AGGREGATOR_SYSTEM,
-        messages=[{"role": "user", "content": user_msg}],
-    )
-    report = response.content[0].text
+    report = _run_claude(AGGREGATOR_SYSTEM, prompt)
     feature.write_build_report(report)
 
 
-def run_build(feature: Feature, client: anthropic.Anthropic, project_root: Path) -> None:
+def run_build(feature: Feature, project_root: Path) -> None:
     """Full build pipeline: decompose → execute → aggregate."""
     console.rule(f"[bold]Building: {feature.feature_id}")
 
-    # 1. Decompose
     feature.set_status("decomposing")
-    tasks = decompose_plan(feature, client)
+    tasks = decompose_plan(feature)
     feature.write_tasks(tasks)
 
-    # 2. Topological sort
     levels = topological_levels(tasks)
-    console.print(
-        f"[dim]{len(tasks)} tasks across {len(levels)} execution level(s)[/]"
-    )
+    console.print(f"[dim]{len(tasks)} tasks across {len(levels)} execution level(s)[/]")
 
-    # 3. Execute
     feature.set_status("building")
     results = asyncio.run(_execute_levels(levels, feature, project_root))
 
-    # 4. Finalize status
     failed = [r for r in results if r["status"] == "failed"]
     feature.set_status("build-partial" if failed else "built")
 
-    # 5. Aggregate
-    _aggregate_results(results, feature, client)
+    _aggregate_results(results, feature)
 
-    # 6. Summary
     console.rule("[bold green]Build complete" if not failed else "[bold yellow]Build partial")
     console.print(
         f"[green]{len(results) - len(failed)} succeeded[/]"
