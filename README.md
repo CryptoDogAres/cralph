@@ -11,6 +11,50 @@ cralph build
 
 ---
 
+## Purpose
+
+Large software projects suffer from two compounding problems when using AI agents: **context poisoning** and **sequential bottlenecks**.
+
+Context poisoning happens when an agent retries a task in the same conversation — every failed attempt accumulates as noise, and each successive attempt is worse than the last. Sequential bottlenecks happen when implementation tasks that could run in parallel are forced to wait on each other.
+
+cralph solves both:
+
+- **Planning** uses a fresh-context loop where each iteration reads only what it needs from files, not conversation history. A separate reviewer role (also fresh context) catches mistakes the planner might miss. After up to 6 iterations the plan is locked and human-reviewable before any code is written.
+- **Building** decomposes the approved plan into a dependency graph and executes independent tasks in parallel using up to 500 concurrent Codex agents. Tasks that share files are serialized automatically via dependency edges.
+
+The result is a workflow designed for **large, multi-feature projects** where multiple plans can be in-flight simultaneously, each tracked independently in `.cralph/`, and where the build phase scales to the size of the task rather than running everything serially.
+
+---
+
+## Installation
+
+**Prerequisites:**
+- Python 3.11+
+- `ANTHROPIC_API_KEY` environment variable set
+- [OpenAI Codex CLI](https://github.com/openai/codex) installed (`codex` in PATH)
+
+**Install once globally** (recommended — works in any project):
+
+```bash
+pipx install git+https://github.com/CryptoDogAres/cralph.git
+```
+
+Or clone and install in editable mode:
+
+```bash
+git clone https://github.com/CryptoDogAres/cralph.git
+cd cralph
+pipx install .   # or: pip install -e .
+```
+
+**Add to a specific project** via PDM:
+
+```bash
+pdm add --dev git+https://github.com/CryptoDogAres/cralph.git
+```
+
+---
+
 ## How it works
 
 ### Phase 1 — `generate`
@@ -40,29 +84,6 @@ Claude aggregates results → build report
 ```
 
 Tasks in the same level are independent (disjoint file ownership), so they safely run in parallel. Tasks with dependencies wait for their level to complete first.
-
----
-
-## Installation
-
-**Prerequisites:**
-- Python 3.11+
-- `ANTHROPIC_API_KEY` environment variable set
-- [OpenAI Codex CLI](https://github.com/openai/codex) installed (`codex` in PATH)
-
-**Install cralph globally:**
-
-```bash
-git clone https://github.com/CryptoDogAres/cralph.git
-cd cralph
-pip install -e .
-```
-
-Or with pipx (recommended for global CLI tools):
-
-```bash
-pipx install .
-```
 
 ---
 
